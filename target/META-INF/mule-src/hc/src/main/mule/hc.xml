@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+	<http:request-config name="HTTP_Request_configuration"
+		doc:name="HTTP Request configuration" doc:id="b02e2484-e9d8-43ef-98d7-ef66934391fc">
+		<http:request-connection host="localhost"
+			port="8090" />
+	</http:request-config>
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="e0eeba1a-caf9-4c97-a0c0-147a97d73e79" >
+		<http:listener-connection host="0.0.0.0" port="8081" />
+	</http:listener-config>
+	<db:config name="Database_Config" doc:name="Database Config" doc:id="98669266-e7d0-4821-9240-650936b3a983" >
+		<db:my-sql-connection host="localhost" port="3306" user="root" password="No217353" database="world" />
+	</db:config>
+	<http:listener-config name="HTTP_Listener_config1" doc:name="HTTP Listener config" doc:id="83c68195-b930-46cd-98bb-63d61171991b" >
+		<http:listener-connection host="0.0.0.0" port="8090" />
+	</http:listener-config>
+	<configuration-properties doc:name="Configuration properties" doc:id="19f71903-f4fb-4064-8e14-6bcc380c02c7" file="app.yaml" />
+	<flow name="health-status-flow" doc:id="f8768a7f-55d3-4c2b-8d33-2b09817fbda8">
+		<http:listener doc:name="Listener"
+			doc:id="cdf33e0c-946b-404d-a98d-04a3144c5276" config-ref="HTTP_Listener_config"
+			path="/health" allowedMethods="GET">
+			<http:response statusCode="#[vars.statusCode]"
+				reasonPhrase="#[vars.statusReason]" />
+		</http:listener>
+		<scatter-gather doc:name="Scatter-Gather"
+			doc:id="a3128c3b-f7e6-4ebd-8651-7faaf0b70802" maxConcurrency="1">
+			<route>
+				<flow-ref doc:name="health-status-flow" doc:id="b5b5a0b7-cfb4-40f5-90ae-0cad4412e5e3"
+					name="http-threshold-health-status-flow" targetValue="#[payload]" />
+			</route>
+			<route>
+				<flow-ref doc:name="db-health-status-flow" doc:id="b5c409f7-fea5-427a-ae5a-00a5c7a99072"
+					name="db-health-status-flow" targetValue="#[payload]" />
+			</route>
+		</scatter-gather>
+		<ee:transform doc:name="Status"
+			doc:id="4f630500-453f-4c32-836e-ab12ea6b4690">
+			<ee:message>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="status"><![CDATA[%dw 2.0
+output application/java
+import countBy from dw::core::Arrays
+---
+payload pluck $
+countBy ($.payload.serviceHealth.status == "DOWN")]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<ee:transform doc:name="Response"
+			doc:id="979a431f-7486-4617-be36-b54c0c6d0bb2">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/json skipNullOn="everywhere"
+---
+{
+	status: if (vars.status > 0) "DOWN" else "UP",
+	details: payload pluck $ map {
+		($.payload.serviceHealth match {
+			case is Object -> $
+			else -> null
+		})
+	}
+}]]></ee:set-payload>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="statusCode"><![CDATA[%dw 2.0
+output application/java
+---
+vars.status match {
+	case "UP" -> 200
+	else -> 503
+}]]></ee:set-variable>
+				<ee:set-variable variableName="statusReason"><![CDATA[%dw 2.0
+output application/java
+---
+vars.status match {
+	case "UP" -> "Healthy"
+	else -> "Unhealthy - Service Unavailable"
+}]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+	</flow>
+	<flow name="default-health-status-flow" doc:id="7873c354-1ce5-4c44-b246-70e0f9829699">
+		<ee:transform doc:name="Default"
+			doc:id="ecaf5583-4174-46b8-a6c4-52d28a83d499">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+{
+	serviceHealth: {
+		status: "UP"
+	}
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+	</flow>
+	<flow name="http-health-status-flow" doc:id="1aebe911-fa49-4119-aa9f-a2b0a22ee19e">
+		<http:request method="GET" doc:name="PING"
+			doc:id="69ff1cdd-f2f4-4722-8207-da9721a94052" config-ref="HTTP_Request_configuration"
+			path="/info4" target="service" targetValue="#[attributes]"
+			requestStreamingMode="ALWAYS">
+			<http:response-validator>
+				<http:failure-status-code-validator
+					values="600" />
+			</http:response-validator>
+		</http:request>
+		<ee:transform doc:name="HTTP health status"
+			doc:id="bfea4004-c3ab-4e8f-b0d2-852050493090">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+{
+	serviceHealth: {
+		serviceType: "http",
+		(using (status = if (vars.service.statusCode == 200) "UP" else "DOWN") {
+			status: status,
+			(status match {
+				case "DOWN" -> {
+					errorCode: vars.service.reasonPhrase,
+					statusCode: vars.service.statusCode
+				}
+				else -> {}
+			})
+			
+		})
+	}
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+	</flow>
+	<flow name="http-threshold-health-status-flow" doc:id="d20a00e0-a7fe-4de7-ac93-e16545f6d1eb">
+		<ee:transform doc:name="Transform Message"
+			doc:id="8e4c9939-e6e7-43fa-b7d1-a9258a3a5152">
+			<ee:message>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="startTime"><![CDATA[%dw 2.0
+output application/java
+---
+now()]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<http:request method="GET" doc:name="PING"
+			doc:id="41bed653-2624-4907-ae44-94fe24704189" config-ref="HTTP_Request_configuration"
+			path="/info5" requestStreamingMode="ALWAYS" target="service"
+			targetValue="#[attributes]" responseTimeout="60000">
+			<http:response-validator>
+				<http:failure-status-code-validator
+					values="600" />
+			</http:response-validator>
+		</http:request>
+		<ee:transform doc:name="HTTP health status"
+			doc:id="08aaa77a-9bca-4243-90c2-178784a1e6c8">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+{
+	serviceHealth: {
+		serviceType: "http",
+		(using (
+			thresholdMet = (now()-vars.startTime).seconds < p("health.http.threshold") as Number,
+			status = if (vars.service.statusCode == 200 and thresholdMet) "UP" else "DOWN"
+		) {
+			status: status,
+			(status match {
+				case "DOWN" -> {
+					errorCode: vars.service.reasonPhrase match {
+						case met if thresholdMet -> $
+						else -> "THRESHOLD BREACHED"
+					},
+					statusCode: vars.service.statusCode
+				}
+				else -> {}
+			})
+			
+		})
+	}
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+	</flow>
+	<flow name="db-health-status-flow" doc:id="20043b9b-9e73-4819-8821-7924652c5165">
+		<try doc:name="Try" doc:id="1643b0a3-bb87-429a-b639-3e4501491411">
+			<db:select doc:name="Select" doc:id="e62829f0-66c8-4af9-bbfd-c224f1921ced"
+				config-ref="Database_Config" fetchSize="1" maxRows="1" target="service"
+				targetValue="#[attributes]">
+				<db:sql><![CDATA[select * from city44]]></db:sql>
+			</db:select>
+			<error-handler>
+				<on-error-continue enableNotifications="true"
+					logException="true" doc:name="On Error Continue" doc:id="33eae07f-c18a-4ecc-ac8c-f886c9cb6f7b">
+					<set-variable value="#[error.errorType.identifier]"
+						doc:name="Set Variable" doc:id="0c43b940-3026-4b81-a8b6-6ff20b7cbdba"
+						variableName="dbError" />
+				</on-error-continue>
+			</error-handler>
+		</try>
+		<ee:transform doc:name="DB health status"
+			doc:id="9c93e12e-4199-4a3d-9d82-584abee51738">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java 
+---
+{
+	serviceHealth: {
+		serviceType: "db",
+		(using (status = if (vars.dbError == null) "UP" else "DOWN") {
+			status: status,
+			(status match {
+				case "DOWN" -> {
+					errorCode: vars.dbError,
+					statusCode: vars.service.statusCode
+				}
+				else -> {}
+			})
+			
+		})
+	}
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+	</flow>
+	<flow name="statusFlow" doc:id="07d9ccb0-ec8f-40c3-b12e-94216f5a5d95">
+		<http:listener doc:name="Listener"
+			doc:id="4073fb2e-d9fd-4064-a8a8-05f27dfa6ec8" config-ref="HTTP_Listener_config1"
+			path="/info4" />
+		<set-payload value="{}" doc:name="Set Payload"
+			doc:id="c4770429-cb7a-4417-a661-0b599efb44b1" mimeType="application/json" />
+	</flow>
+</mule>
