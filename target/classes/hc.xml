@@ -50,8 +50,7 @@ http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/cu
 output application/java
 import countBy from dw::core::Arrays
 ---
-payload pluck $
-countBy ($.payload.serviceHealth.status == "DOWN")]]></ee:set-variable>
+payload ]]></ee:set-variable>
 			</ee:variables>
 		</ee:transform>
 		<ee:transform doc:name="Response"
